@@ -17,22 +17,20 @@ typedef enum {
 typedef struct {
     int client_id;
     TaskType task;
-    int value;   //pt primes si primedivisors
+    long long value;   //pt primes si primedivisors
     char name[100];    //pt anagrams
 } Job;
 
 typedef struct {
     int client_id;
-    int result;
+    long long result;
     char buffer[MAX];  //pt anagrams
     int worker;
 } Result;
 
-int primes(int n);
-int primeDivisors(int n);
+long long primes(long long n);
+long long primeDivisors(long long n);
 char *anagrams(char *name);
 
-
-void write_to_file(Result res);
 int contains_digit(const char *s);
 #endif

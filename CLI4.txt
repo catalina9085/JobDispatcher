@@ -1,0 +1,4 @@
+abc,acb,bac,bca,cba,cab,
+33860
+52831
+71274

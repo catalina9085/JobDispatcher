@@ -9,7 +9,24 @@ mpiexec -n 3 main.exe
 #include <string.h>
 #include "util.h"
 
+void write_to_file(Result res){
+    char filename[64];
+    sprintf(filename, "CLI%d.txt", res.client_id);
 
+    FILE *out = fopen(filename, "a");
+    if(!out){
+        printf("Cannot open file\n");
+        fflush(stdout);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    if(res.result!=-1){
+        fprintf(out,"%lld\n",res.result);
+    }
+    else{
+        fprintf(out,"%s\n",res.buffer);
+    }
+}
 
 int main(int argc, char *argv[]) {
     int rank, size;
@@ -38,15 +55,22 @@ int main(int argc, char *argv[]) {
 
         char line[256];
 
+        double start_time = MPI_Wtime();
         //fie mai avem comenzi de citit,fie mai avem raspunsuri de primit
         while (!eof || jobs_cnt > 0) {
 
             double now = MPI_Wtime();
 
+            int free_worker = -1;
+            for (int i = 1; i < size; i++) {
+                if (!busy[i]) {
+                    free_worker = i;
+                    break;
+                }
+            }
             //daca nu suntem in wait si nu s-a terminat fisierul,citim o comanda
-            if (!eof && !waiting) {
+            if (!eof && !waiting && free_worker != -1) {
                 if (fgets(line, sizeof(line), f)) {
-
                     if (strncmp(line, "WAIT", 4) == 0) {
                         int t;
                         sscanf(line, "WAIT %d", &t);
@@ -80,19 +104,15 @@ int main(int argc, char *argv[]) {
                             continue;
                         }
 
-                        //daca gasim un worker liber,ii trimitem job-ul
-                        for (int i = 1; i < size; i++) {
-                            if (!busy[i]) {
-                                MPI_Send(&job, sizeof(Job), MPI_BYTE,
-                                         i, TAG_JOB, MPI_COMM_WORLD);
-                                busy[i] = 1;
-                                jobs_cnt++;
+                        MPI_Send(&job, sizeof(Job), MPI_BYTE,
+                                    free_worker, TAG_JOB, MPI_COMM_WORLD);
+                        busy[free_worker] = 1;
+                        jobs_cnt++;
 
-                                printf("[MAIN] Sent job to worker %d (value=%d)\n",i, job.value);
-                                fflush(stdout);
-                                break;
-                            }
-                        }
+                        printf("[MAIN] Sent job to worker %d (value=%d)\n",free_worker, job.value);
+                        fflush(stdout);
+                        
+                    
                     }
                 } else {
                     eof = 1;
@@ -136,10 +156,12 @@ int main(int argc, char *argv[]) {
         for (int i = 1; i < size; i++) {
             MPI_Send(NULL, 0, MPI_BYTE, i, TAG_STOP, MPI_COMM_WORLD);
         }
-
-        fclose(f);
-        printf("[MAIN] Server finished\n");
+        double end_time = MPI_Wtime();
+        printf("[MAIN] Parallel execution time: %.3f seconds\n",end_time - start_time);
         fflush(stdout);
+        fclose(f);
+        //printf("[MAIN] Server finished\n");
+        
     }
 
    //worker
@@ -161,8 +183,7 @@ int main(int argc, char *argv[]) {
 
                 Result res;
                 res.client_id = job.client_id;
-                res.worker = rank;
-
+                res.worker=rank;
                 switch (job.task) {
 
                     case TASK_PRIMES:
@@ -192,3 +213,11 @@ int main(int argc, char *argv[]) {
     MPI_Finalize();
     return 0;
 }
+
+
+/*
+Results:
+p=2  3.311 sec
+p=4  1.232 sec
+p=8  0.697 sec
+*/

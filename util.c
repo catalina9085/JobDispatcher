@@ -3,30 +3,29 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
-#include <mpi.h>
 
-int is_prime(int n) {
+int is_prime(long long n) {
     if (n < 2)
         return 0;
 
-    for (int i = 2; i * i <= n; i++) {
+    for (long long i = 2; i * i <= n; i++) {
         if (n % i == 0)
             return 0;
     }
     return 1;
 }
 
-int primes(int n){
-    int cnt=0;
-    for(int i=1;i<=n;i++){
+long long primes(long long n){
+    long long cnt=0;
+    for(long long i=1;i<=n;i++){
         if(is_prime(i)) cnt++;
     }
     return cnt;
 }
 
-int primeDivisors(int n){
-    int cnt=0;
-    for (int i = 2; i<= n; i++) {
+long long primeDivisors(long long n){
+    long long cnt=0;
+    for (long long i = 2; i<= n; i++) {
         if (n % i == 0 && is_prime(i))
             cnt++;
     }
@@ -70,7 +69,7 @@ void generate_anagrams_buf(char *str, int l, int r,
         int len = strlen(str);
         memcpy(buf + *pos, str, len);
         *pos += len;
-        buf[(*pos)++] = '\n';
+        buf[(*pos)++] = ',';
         return;
     }
 
@@ -116,23 +115,4 @@ int contains_digit(const char *s) {
             return 1;
     }
     return 0;
-}
-
-void write_to_file(Result res){
-    char filename[64];
-    sprintf(filename, "CLI%d.txt", res.client_id);
-
-    FILE *out = fopen(filename, "a");
-    if(!out){
-        printf("Cannot open file\n");
-        fflush(stdout);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-
-    if(res.result!=-1){
-        fprintf(out,"%d\n",res.result);
-    }
-    else{
-        fprintf(out,"%s\n",res.buffer);
-    }
 }
