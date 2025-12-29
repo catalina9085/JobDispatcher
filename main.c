@@ -9,6 +9,9 @@ mpiexec -n 3 main.exe
 #include <string.h>
 #include "util.h"
 
+MatrixTask mtasks[MAX_PENDING_MJOBS];
+
+
 void write_to_file(Result res){
     char filename[64];
     sprintf(filename, "CLI%d.txt", res.client_id);
@@ -26,6 +29,90 @@ void write_to_file(Result res){
     else{
         fprintf(out,"%s\n",res.buffer);
     }
+    fclose(out);
+}
+
+void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
+{
+    static int next_job_id = 1;
+
+    char cmd[32], f1[128], f2[128];
+    int N;
+
+    if (sscanf(line, "%31s %d %127s %127s", cmd, &N, f1, f2) != 4) {
+        printf("Invalid command: %s\n", line);
+        fflush(stdout);
+        return;
+    }
+
+    int task = (strcmp(cmd, "MATRIXADD") == 0) ? TASK_MATRIXADD : TASK_MATRIXMULT;
+
+    long long *A = read_matrix(f1, N);
+    long long *B = read_matrix(f2, N);
+    if (!A || !B) {
+        free(A); free(B);
+        exit(-1);
+    }
+
+    //group ul de threaduri
+    int group[1024], group_size = 0;
+
+    if (N > MATRIX_THRESHOLD) {
+        for (int i = 1; i < size; i++)
+            if (!busy[i]) group[group_size++] = i;
+    } else {
+        for (int i = 1; i < size; i++)
+            if (!busy[i]) { group[group_size++] = i; break; }
+    }
+
+    if (group_size == 0) {
+        printf("No free workers for matrix operation\n");
+        fflush(stdout);
+        free(A); free(B);
+        return;
+    }
+
+    int job_id = next_job_id++;
+
+    char outname[256];
+    sprintf(outname, "%s_result_%dx%d_job%d.txt",
+        (task == TASK_MATRIXADD ? "ADD" : "MULT"),
+        N, N, job_id);
+
+    MatrixTask *mt=mt_create(job_id, N, group_size, outname);
+    if(!mt){
+        printf("No free MATRIX slots\n");
+        fflush(stdout);
+        return;
+    }
+
+
+    int rows = N / group_size, rest = N % group_size, start = 0;
+
+    for (int i = 0; i < group_size; i++) {
+        int current = group[i];
+        int local_n = rows + (i < rest ? 1 : 0);
+
+        MatrixJob mj = { task, job_id, N, start, local_n };
+
+        MPI_Send(&mj, sizeof(mj), MPI_BYTE, current, TAG_MJOB, MPI_COMM_WORLD);
+        MPI_Send(A + start * N, local_n * N, MPI_LONG_LONG, current, 0, MPI_COMM_WORLD);
+
+        if (task == TASK_MATRIXADD)
+            MPI_Send(B + start * N, local_n * N, MPI_LONG_LONG, current, 0, MPI_COMM_WORLD);
+        else
+            MPI_Send(B, N * N, MPI_LONG_LONG, current, 0, MPI_COMM_WORLD);
+
+        busy[current] = 1;
+        (*jobs_cnt)++;
+        start += local_n;
+    }
+
+    printf("[MAIN] MATRIX job %d dispatched (%d workers)\n", job_id, group_size);
+    fflush(stdout);
+
+    free(A); 
+    free(B);
 }
 
 int main(int argc, char *argv[]) {
@@ -36,7 +123,7 @@ int main(int argc, char *argv[]) {
 
     //main server
     if (rank == 0) {
-        FILE *f = fopen("commands.txt", "r");
+        FILE *f = fopen("commands2.txt", "r");
         if (!f) {
             printf("Cannot open file\n");
             fflush(stdout);
@@ -71,20 +158,30 @@ int main(int argc, char *argv[]) {
             //daca nu suntem in wait si nu s-a terminat fisierul,citim o comanda
             if (!eof && !waiting && free_worker != -1) {
                 if (fgets(line, sizeof(line), f)) {
-                    if (strncmp(line, "WAIT", 4) == 0) {
+                    printf("[DEBUG] Read line: %s", line);
+                    fflush(stdout);
+                    char first[32];
+                    if (sscanf(line, "%31s", first) != 1) {
+                        // nimic
+                    }
+                    else if (strcmp(first, "WAIT") == 0) {
                         int t;
                         sscanf(line, "WAIT %d", &t);
                         waiting = 1;
                         wait_until = now + t;
                         printf("[MAIN] WAIT %d seconds\n", t);
                         fflush(stdout);
-                    } else {
-                        Job job;
+                    }
+                    else if (strcmp(first, "MATRIXADD") == 0 || strcmp(first, "MATRIXMULT") == 0) {
+                        handle_matrix_command(line, size, busy, &jobs_cnt);
+                    }
+                    else if(strncmp(first, "CLI", 3) == 0){
+                        Job job={0};
                         char cli[32];
                         char cmd[32];
                         char arg[100];
 
-                        sscanf(line, "%s %s %s", cli, cmd, arg);
+                        sscanf(line, "%31s %31s %99s", cli, cmd, arg);
                         sscanf(cli, "CLI%d", &job.client_id);
 
                         if (strcmp(cmd, "PRIMES") == 0) {
@@ -150,6 +247,41 @@ int main(int argc, char *argv[]) {
                 //        res.worker, res.client_id, res.buffer);  
                 // fflush(stdout);
             }
+            MPI_Status mstatus;
+            int mflag = 0;
+            MPI_Iprobe(MPI_ANY_SOURCE, TAG_MRESULT,MPI_COMM_WORLD, &mflag, &mstatus);
+            if(mflag){
+                    MatrixResult mr;
+                    MPI_Recv(&mr, sizeof(MatrixResult), MPI_BYTE,
+                            mstatus.MPI_SOURCE, TAG_MRESULT,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                    int N = mr.N;
+                    int local_n = mr.local_n;
+
+                    long long *C_part = malloc(local_n * N * sizeof(long long));
+                    MPI_Recv(C_part, local_n * N, MPI_LONG_LONG,
+                            mstatus.MPI_SOURCE, 0,
+                            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                    MatrixTask *mt = mt_find(mr.job_id);
+                    if (mt) {
+                        memcpy(mt->C + mr.start_row * N,
+                            C_part,
+                            local_n * N * sizeof(long long));
+
+                        mt->received_parts++;
+                        if (mt->received_parts == mt->expected_parts) {
+                            mt_finish(mt);
+                        }
+                    }
+
+                    free(C_part);
+                    busy[mr.worker] = 0;
+                    jobs_cnt--;
+            }
+            
+
         }
 
         // Oprim workerii
@@ -204,6 +336,52 @@ int main(int argc, char *argv[]) {
                 MPI_Send(&res, sizeof(Result), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
 
             }
+            else if (status.MPI_TAG == TAG_MJOB) {
+                MatrixJob mj;
+                MPI_Recv(&mj, sizeof(MatrixJob), MPI_BYTE,
+                        0, TAG_MJOB, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                int N = mj.N;
+                int local_n = mj.local_n;
+
+                long long *A = malloc(local_n * N * sizeof(long long));
+                long long *C = malloc(local_n * N * sizeof(long long));
+
+                MPI_Recv(A, local_n * N, MPI_LONG_LONG,
+                        0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                if (mj.task == TASK_MATRIXADD) {
+                    long long *B = malloc(local_n * N * sizeof(long long));
+                    MPI_Recv(B, local_n * N, MPI_LONG_LONG,
+                            0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                    add(C, A, B, local_n, N);
+                    free(B);
+                } else {
+                    long long *B = malloc(N * N * sizeof(long long));
+                    MPI_Recv(B, N * N, MPI_LONG_LONG,
+                            0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+                    mult(C, A, B, local_n, N);
+                    free(B);
+                }
+
+                MatrixResult mr;
+                mr.job_id = mj.job_id;
+                mr.worker = rank;
+                mr.N = N;
+                mr.start_row = mj.start_row;
+                mr.local_n = local_n;
+
+                MPI_Send(&mr, sizeof(MatrixResult), MPI_BYTE,
+                        0, TAG_MRESULT, MPI_COMM_WORLD);
+                MPI_Send(C, local_n * N, MPI_LONG_LONG,
+                        0, 0, MPI_COMM_WORLD);
+
+                free(A);
+                free(C);
+            }
+
         }
 
         printf("[WORKER %d] exiting\n", rank);
