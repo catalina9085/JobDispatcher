@@ -9,7 +9,7 @@ gcc -Wall serial.c util.c -o serial.exe
 #include <time.h>
 #include "util.h"
 
-void write_to_file(Result res){
+void writeToFile(Result res){
     char filename[64];
     sprintf(filename, "CLI%d_serial.txt", res.client_id);
 
@@ -29,7 +29,7 @@ void write_to_file(Result res){
 }
 
 int main(int argc, char *argv[]) {
-    FILE *f = fopen("commands.txt", "r");
+    FILE *f = fopen("commands1.txt", "r");
     if (!f) {
         printf("Cannot open file\n");
         fflush(stdout);
@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
                 printf("Unknown command: %s\n", cmd);
                 continue;
             }
-            write_to_file(res);
+            writeToFile(res);
         } else {
             eof = 1;
         }
@@ -85,3 +85,6 @@ int main(int argc, char *argv[]) {
 Results:
 3.232 sec
 */
+
+
+

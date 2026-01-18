@@ -47,30 +47,13 @@ void swap(char *a, char *b) {
     *b = tmp;
 }
 
-void generate(char *str, int l, int r,
-              char **result, int *idx) {
 
-    if (l == r) {
-        result[*idx] = strdup(str);
-        (*idx)++;
-        return;
-    }
-
-    for (int i = l; i <= r; i++) {
-        swap(&str[l], &str[i]);
-        generate(str, l + 1, r, result, idx);
-        swap(&str[l], &str[i]);
-    }
-}
-
-
-void generate_anagrams_buf(char *str, int l, int r,
-                           char *buf, int *pos) {
+void generateAnagrams(char *str, int l, int r, char *res, int *idx) {
     if (l == r) {
         int len = strlen(str);
-        memcpy(buf + *pos, str, len);
-        *pos += len;
-        buf[(*pos)++] = ',';
+        memcpy(res + *idx, str, len);
+        *idx += len;
+        res[(*idx)++] = '\n';
         return;
     }
 
@@ -79,7 +62,7 @@ void generate_anagrams_buf(char *str, int l, int r,
         str[l] = str[i];
         str[i] = tmp;
 
-        generate_anagrams_buf(str, l + 1, r, buf, pos);
+        generateAnagrams(str, l + 1, r, res, idx);
 
         tmp = str[l];
         str[l] = str[i];
@@ -88,28 +71,23 @@ void generate_anagrams_buf(char *str, int l, int r,
 }
 
 
-char *anagrams(char *name){
+char *anagrams(char *name) {
     int n = strlen(name);
-    int size = factorial(n);
+    int count = factorial(n);
 
-    char **result = malloc((size) * sizeof(char *));
+    int size = count * (n + 1) + 1;
+    char *res = malloc(size);
+    if(!res) exit(-1);
     int idx = 0;
 
     char *temp = strdup(name);
-    generate(temp, 0, n - 1, result, &idx);
+    generateAnagrams(temp, 0, n - 1, res, &idx);
     free(temp);
 
-    int buf_size = size * (n + 1) +1;
-    char *buffer = malloc(buf_size);
-    idx = 0;
-    temp=strdup(name);
-    generate_anagrams_buf(temp, 0, n - 1, buffer, &idx);
-    if (idx < buf_size) buffer[idx] =0;
-    for(int i=0;i<size;i++)
-        free(result[i]);
-    free(result);
-    return buffer;
+    res[idx] = '\0';
+    return res;
 }
+
 
 
 
@@ -122,11 +100,9 @@ int contains_digit(const char *s) {
 }
 
 
-long long *read_matrix(char *fileName, int N) {
+long long *readMatrix(char *fileName, int N) {
     FILE *f = fopen(fileName, "r");
-    if (!f){
-        exit(-1);
-    }
+    if (!f) exit(-1);
 
     long long *m =malloc(N*N*sizeof(long long));
     if (!m) {
@@ -146,14 +122,13 @@ long long *read_matrix(char *fileName, int N) {
     return m;
 }
 
-void write_matrix( char *filename, long long *m, int N) {
+void writeMatrix( char *filename, long long *m, int N) {
     FILE *f = fopen(filename, "w");
     if (!f) exit(-1);
 
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
-            fprintf(f, "%lld", m[i * N + j]);
-            if (j < N - 1) fprintf(f, " ");
+            fprintf(f, "%lld ", m[i * N + j]);
         }
         fprintf(f, "\n");
     }
@@ -180,7 +155,7 @@ void write_matrix( char *filename, long long *m, int N) {
 }
 
 
-MatrixTask* mt_create(int job_id, int N, int expected_parts, const char *outname){
+MatrixTask* create(int job_id, int N, int expected_parts, char *outname){
     for (int i = 0; i < MAX_PENDING_MJOBS; i++) {
         if (!mtasks[i].in_use) {
             mtasks[i].in_use = 1;
@@ -189,6 +164,7 @@ MatrixTask* mt_create(int job_id, int N, int expected_parts, const char *outname
             mtasks[i].expected_parts = expected_parts;
             mtasks[i].received_parts = 0;
             mtasks[i].C =calloc(N *N,sizeof(long long));
+            if(!mtasks[i].C) exit(-1);
             strncpy(mtasks[i].outname, outname, sizeof(mtasks[i].outname) - 1);
             mtasks[i].outname[sizeof(mtasks[i].outname) - 1] =0;
             return &mtasks[i];
@@ -197,16 +173,16 @@ MatrixTask* mt_create(int job_id, int N, int expected_parts, const char *outname
     return NULL;
 }
 
-MatrixTask* mt_find(int job_id) {
+MatrixTask* find(int job_id) {
     for (int i = 0; i < MAX_PENDING_MJOBS; i++) {
         if (mtasks[i].in_use && mtasks[i].job_id == job_id) return &mtasks[i];
     }
     return NULL;
 }
 
-void mt_finish(MatrixTask *mt) {
+void finish(MatrixTask *mt) {
     if (!mt) return;
-    write_matrix(mt->outname, mt->C, mt->N);
+    writeMatrix(mt->outname, mt->C, mt->N);
     free(mt->C);
     mt->C = NULL;
     mt->in_use = 0;

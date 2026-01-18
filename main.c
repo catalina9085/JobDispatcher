@@ -10,9 +10,10 @@ mpiexec -n 3 main.exe
 #include "util.h"
 
 MatrixTask mtasks[MAX_PENDING_MJOBS];
+FILE *logFile = NULL;
+double t0;
 
-
-void write_to_file(Result res){
+void writeToFile(Result res){
     char filename[64];
     sprintf(filename, "CLI%d.txt", res.client_id);
 
@@ -32,7 +33,7 @@ void write_to_file(Result res){
     fclose(out);
 }
 
-void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
+void handleMatrixCommand(char *line,int size,int *busy,int *jobs_cnt)
 {
     static int next_job_id = 1;
 
@@ -47,8 +48,8 @@ void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
 
     int task = (strcmp(cmd, "MATRIXADD") == 0) ? TASK_MATRIXADD : TASK_MATRIXMULT;
 
-    long long *A = read_matrix(f1, N);
-    long long *B = read_matrix(f2, N);
+    long long *A = readMatrix(f1, N);
+    long long *B = readMatrix(f2, N);
     if (!A || !B) {
         free(A); free(B);
         exit(-1);
@@ -61,6 +62,7 @@ void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
         for (int i = 1; i < size; i++)
             if (!busy[i]) group[group_size++] = i;
     } else {
+        //asignam intreaga matrice la un singur worker
         for (int i = 1; i < size; i++)
             if (!busy[i]) { group[group_size++] = i; break; }
     }
@@ -79,7 +81,7 @@ void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
         (task == TASK_MATRIXADD ? "ADD" : "MULT"),
         N, N, job_id);
 
-    MatrixTask *mt=mt_create(job_id, N, group_size, outname);
+    MatrixTask *mt=create(job_id, N, group_size, outname);
     if(!mt){
         printf("No free MATRIX slots\n");
         fflush(stdout);
@@ -87,10 +89,19 @@ void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
     }
 
 
-    int rows = N / group_size, rest = N % group_size, start = 0;
+    int rows = N / group_size;
+    int rest = N % group_size;
+    int start = 0;
+
+    double t = MPI_Wtime()-t0;
+    fprintf(logFile,
+        "MATRIX DISPATCHED time=%.6f job_id=%d workers=%d\n",
+        t, job_id, group_size);
+    fflush(logFile);
 
     for (int i = 0; i < group_size; i++) {
         int current = group[i];
+        //distribuim restul
         int local_n = rows + (i < rest ? 1 : 0);
 
         MatrixJob mj = { task, job_id, N, start, local_n };
@@ -108,7 +119,7 @@ void handle_matrix_command(char *line,int size,int *busy,int *jobs_cnt)
         start += local_n;
     }
 
-    printf("[MAIN] MATRIX job %d dispatched (%d workers)\n", job_id, group_size);
+    printf("MATRIX job %d dispatched (%d workers)\n", job_id, group_size);
     fflush(stdout);
 
     free(A); 
@@ -123,10 +134,15 @@ int main(int argc, char *argv[]) {
 
     //main server
     if (rank == 0) {
-        FILE *f = fopen("commands2.txt", "r");
+        FILE *f = fopen("commands1.txt", "r");
         if (!f) {
             printf("Cannot open file\n");
             fflush(stdout);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        logFile = fopen("log.txt", "w");
+        if (!logFile) {
+            printf("Cannot open log file\n");
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
 
@@ -142,6 +158,8 @@ int main(int argc, char *argv[]) {
 
         char line[256];
 
+        double t;//pt loguri
+        t0 = MPI_Wtime();
         double start_time = MPI_Wtime();
         //fie mai avem comenzi de citit,fie mai avem raspunsuri de primit
         while (!eof || jobs_cnt > 0) {
@@ -158,22 +176,24 @@ int main(int argc, char *argv[]) {
             //daca nu suntem in wait si nu s-a terminat fisierul,citim o comanda
             if (!eof && !waiting && free_worker != -1) {
                 if (fgets(line, sizeof(line), f)) {
-                    printf("[DEBUG] Read line: %s", line);
-                    fflush(stdout);
+                    t = MPI_Wtime()-t0;
+                    fprintf(logFile, "RECEIVED time=%.6f cmd=%s", t, line);
+                    fflush(logFile);
+
                     char first[32];
                     if (sscanf(line, "%31s", first) != 1) {
-                        // nimic
+                        // linie invalida
                     }
                     else if (strcmp(first, "WAIT") == 0) {
                         int t;
                         sscanf(line, "WAIT %d", &t);
                         waiting = 1;
                         wait_until = now + t;
-                        printf("[MAIN] WAIT %d seconds\n", t);
+                        printf("WAIT %d seconds\n", t);
                         fflush(stdout);
                     }
                     else if (strcmp(first, "MATRIXADD") == 0 || strcmp(first, "MATRIXMULT") == 0) {
-                        handle_matrix_command(line, size, busy, &jobs_cnt);
+                        handleMatrixCommand(line, size, busy, &jobs_cnt);
                     }
                     else if(strncmp(first, "CLI", 3) == 0){
                         Job job={0};
@@ -206,9 +226,14 @@ int main(int argc, char *argv[]) {
                         busy[free_worker] = 1;
                         jobs_cnt++;
 
-                        printf("[MAIN] Sent job to worker %d (value=%d)\n",free_worker, job.value);
+                        printf("Sent job to worker %d (value=%d)\n",free_worker, job.value);
                         fflush(stdout);
-                        
+                        t= MPI_Wtime()-t0;
+                        fprintf(logFile,
+                                "DISPATCHED time=%.6f worker=%d client=CLI%d task=%d\n",
+                                t, free_worker, job.client_id, job.task);
+                        fflush(logFile);
+
                     
                     }
                 } else {
@@ -219,7 +244,7 @@ int main(int argc, char *argv[]) {
             
             if (waiting && now >= wait_until) {
                 waiting = 0;
-                printf("[MAIN] WAIT finished\n");
+                printf("WAIT finished\n");
                 fflush(stdout);
             }
 
@@ -238,14 +263,13 @@ int main(int argc, char *argv[]) {
                 busy[res.worker] = 0;
                 jobs_cnt--;
 
-                write_to_file(res);
-                // if(res.result!=-1)
-                //     printf("[MAIN] Result from worker %d: CLI%d -> %d\n",
-                //        res.worker, res.client_id, res.result);
-                // else    
-                //     printf("[MAIN] Result from worker %d: CLI%d -> %s\n",
-                //        res.worker, res.client_id, res.buffer);  
-                // fflush(stdout);
+                writeToFile(res);
+                t = MPI_Wtime()-t0;
+                fprintf(logFile,
+                        "FINISHED time=%.6f worker=%d client=CLI%d\n",
+                        t, res.worker, res.client_id);
+                fflush(logFile);
+
             }
             MPI_Status mstatus;
             int mflag = 0;
@@ -264,7 +288,7 @@ int main(int argc, char *argv[]) {
                             mstatus.MPI_SOURCE, 0,
                             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-                    MatrixTask *mt = mt_find(mr.job_id);
+                    MatrixTask *mt =find(mr.job_id);
                     if (mt) {
                         memcpy(mt->C + mr.start_row * N,
                             C_part,
@@ -272,7 +296,12 @@ int main(int argc, char *argv[]) {
 
                         mt->received_parts++;
                         if (mt->received_parts == mt->expected_parts) {
-                            mt_finish(mt);
+                            t = MPI_Wtime()-t0;
+                            fprintf(logFile,
+                                "MATRIX FINISHED time=%.6f job_id=%d\n",
+                                t, mt->job_id);
+                            fflush(logFile);
+                            finish(mt);
                         }
                     }
 
@@ -289,11 +318,10 @@ int main(int argc, char *argv[]) {
             MPI_Send(NULL, 0, MPI_BYTE, i, TAG_STOP, MPI_COMM_WORLD);
         }
         double end_time = MPI_Wtime();
-        printf("[MAIN] Parallel execution time: %.3f seconds\n",end_time - start_time);
+        printf("Parallel execution time: %.3f seconds\n",end_time - start_time);
         fflush(stdout);
         fclose(f);
-        //printf("[MAIN] Server finished\n");
-        
+        fclose(logFile);
     }
 
    //worker
@@ -317,7 +345,6 @@ int main(int argc, char *argv[]) {
                 res.client_id = job.client_id;
                 res.worker=rank;
                 switch (job.task) {
-
                     case TASK_PRIMES:
                         res.result=primes(job.value);
                         break;
@@ -384,7 +411,7 @@ int main(int argc, char *argv[]) {
 
         }
 
-        printf("[WORKER %d] exiting\n", rank);
+        printf("WORKER %d exiting\n", rank);
         fflush(stdout);
     }
 

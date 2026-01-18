@@ -1,0 +1,3 @@
+RECEIVED time=0.000125 cmd=MATRIXADD 128 A.txt B.txt
+MATRIX DISPATCHED time=0.021381 job_id=1 workers=7
+MATRIX FINISHED time=0.026505 job_id=1

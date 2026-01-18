@@ -70,13 +70,14 @@ char *anagrams(char *name);
 
 int contains_digit(const char *s);
 
-long long *read_matrix(char *fileName, int N);
-void write_matrix(char *fileName,long long *m, int N);
+long long *readMatrix(char *fileName, int N);
+void writeMatrix(char *fileName,long long *m, int N);
 
- void add(long long *C, long long *A, long long *B, int local_n, int N);
- void mult(long long *C, long long *A, long long *B, int local_n, int N);
-MatrixTask* mt_create(int job_id, int N, int expected_parts, const char *outname);
-MatrixTask* mt_find(int job_id);
-void mt_finish(MatrixTask *mt);
+void add(long long *C, long long *A, long long *B, int local_n, int N);
+void mult(long long *C, long long *A, long long *B, int local_n, int N);
+
+MatrixTask* create(int job_id, int N, int expected_parts, char *outname);
+MatrixTask* find(int job_id);
+void finish(MatrixTask *mt);
 
 #endif

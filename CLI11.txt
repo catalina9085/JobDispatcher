@@ -1,4 +1,0 @@
-4
-abc,acb,bac,bca,cba,cab,
-4
-abc,acb,bac,bca,cba,cab,
